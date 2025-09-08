@@ -10,26 +10,28 @@ Rules:
   A: blue only
   G: dark
 
-Hard constraints (strict):
-  - Cycle 1 and 2 must satisfy channel thresholds (per index type i7/i5).
+Feasibility-first (cycles 1/2):
+  - If there exists an assignment where EVERY lane's cycles 1 & 2 meet thresholds
+    (per index type i7/i5 on lane-aggregate), the optimizer will find and prefer it.
+  - If that is impossible for the given library set, the optimizer minimizes the total
+    deviation from the thresholds on cycles 1 & 2 (lexicographic objective), while
+    still optimizing cycles ≥3 with weights.
 
-Weighted optimization (soft, for cycles >=3):
+Weighted optimization (soft, for cycles ≥3):
   - By default, cycles 3/4 share 60% of the total weight (evenly),
     and cycles 5..N share the remaining 40% (evenly).
-  - Cycles 1 and 2 have zero weight because they are strictly enforced.
+  - Cycles 1 and 2 have zero weight because they are prioritized via feasibility-first.
   - You can adjust the 60% via --w34 (0~1).
 
 Input CSV/TSV must have headers: id,i7,i5
 i5 is NOT reverse-complemented by default. Use --rc-i5 if needed.
 
 easy run:
-  python index_balance.py group library.csv --lanes 3 --out lanes.csv 
-  # library.csv is a csv file with headers: id,i7,i5
-  # xlsx is also supported
+  python index_balance.py group library.csv --lanes 2 --out lanes.csv 
+  # library.csv is a csv/tsv/xlsx with headers: id,i7,i5
 
   python index_balance.py check lanes.csv 
-  # lanes.csv is a csv file with headers: id,i7,i5
-  # xlsx is also supported
+  # lanes.csv is a csv/tsv/xlsx with headers: id,i7,i5
 
 Outputs (human-readable):
   - check: overall info + per-cycle color fractions and pass/fail for i7 and i5
@@ -44,7 +46,7 @@ from typing import Any, Dict, List, Optional, Tuple
 import openpyxl
 
 BASES = ("A", "C", "G", "T")
-BIG_PENALTY = 1e9  # for violating hard constraints in optimization
+BIG_PENALTY = 1e9  # kept for backward-compat, no longer used as a hard plateau
 
 # -------------------- IO & utils --------------------
 
@@ -221,24 +223,19 @@ def make_weights_special(L: int, w34: float) -> List[float]:
 
     w = [0.0] * L
     if 3 <= L <= 4:
-        # all mass spread over 3..L
         mass = 1.0
-        n = L - 2  # number of cycles starting from 3
+        n = L - 2
         for i in range(2, L):
             w[i] = mass / n
     else:
-        # L > 4
-        # cycles 3 and 4
         w[2] = w34 / 2.0  # cycle 3
         w[3] = w34 / 2.0  # cycle 4
-        # cycles 5..L
         n_tail = L - 4
         if n_tail > 0:
             tail_share = (1.0 - w34) / n_tail
             for i in range(4, L):
                 w[i] = tail_share
 
-    # numerical safety: normalize to sum 1 over cycles >=3
     total = sum(w)
     if total > 0:
         w = [x / total for x in w]
@@ -268,6 +265,36 @@ def weighted_penalty(
         pen += weights[i] * v
     return pen
 
+# -------------------- NEW: cycles 1/2 deviation (for feasibility-first) --------------------
+
+def c12_violation_aggregate(
+    seqs: List[str],
+    L: int,
+    min_green: float,
+    min_blue: float,
+    max_dark: float,
+    strict_blue: bool = True
+) -> float:
+    """
+    Sum of violations for cycles 1 and 2 (aggregate over all sequences).
+    If 'strict_blue' is True, mimic the hard check's 'blue > min_blue' by
+    adding a tiny epsilon so that blue == min_blue counts as a tiny violation.
+    """
+    if not seqs or L <= 0:
+        return 0.0
+    EPS = 1e-9 if strict_blue else 0.0
+    blists = per_cycle_base_lists(seqs, L)
+    pen = 0.0
+    for idx in (0, 1):  # cycles 1 and 2
+        if L > idx:
+            col = color_fractions_one_cycle(blists[idx])
+            v = 0.0
+            v += max(0.0, (min_green - col["green"]))
+            v += max(0.0, (min_blue  - col["blue"]) + EPS)  # strict '>'
+            v += max(0.0, (col["dark"] - max_dark))
+            pen += v
+    return pen
+
 def evaluate_color_balance_strict_weighted(
     seqs: List[str],
     cycles: int,
@@ -278,11 +305,11 @@ def evaluate_color_balance_strict_weighted(
 ) -> Dict[str, Any]:
     """
     For CHECK / per-lane report:
-      - Enforce hard constraints on cycles 1 and 2.
+      - Enforce hard constraints on cycles 1 and 2 (boolean for reporting).
       - Report per-cycle pass/fail for 1..cycles.
       - Report weighted penalty over cycles >=3 using make_weights_special(cycles, w34).
     """
-    # hard constraints on C1/C2
+    # hard constraints on C1/C2 (for reporting)
     hard_ok, colors_12 = hard_cycles_ok_aggregate(seqs, cycles, min_green, min_blue, max_dark)
 
     # per-cycle info
@@ -325,7 +352,7 @@ def evaluate_color_balance_strict_weighted(
         "worst_cycle": worst
     }
 
-# -------------------- Lane optimization (with hard constraints) --------------------
+# -------------------- Lane optimization (feasibility-first on C1/C2) --------------------
 
 def lane_cost_with_hard(
     i7_seqs: List[str],
@@ -333,16 +360,29 @@ def lane_cost_with_hard(
     L7: int, L5: int,
     min_green: float, min_blue: float, max_dark: float,
     w7: List[float],
-    w5: List[float]
+    w5: List[float],
+    c12_weight: float = 1e6
 ) -> float:
-    """Cost = BIG_PENALTY if any hard constraint fails; else sum of weighted penalties (i7+i5)."""
-    ok7, _ = hard_cycles_ok_aggregate(i7_seqs, L7, min_green, min_blue, max_dark)
-    ok5, _ = hard_cycles_ok_aggregate(i5_seqs, L5, min_green, min_blue, max_dark)
-    if not ok7 or not ok5:
-        return BIG_PENALTY
+    """
+    Lexicographic/feasibility-first cost:
+      1) Minimize sum of C1/C2 violations (i7 + i5).
+      2) If (1) == 0, minimize weighted penalties on cycles ≥3 (i7 + i5).
+
+    Total cost = c12_weight * (c12_violation_i7 + c12_violation_i5) + (pen7 + pen5)
+
+    With sufficiently large c12_weight, any feasible assignment (C1/C2 violations == 0)
+    is strictly preferred over any infeasible one, while avoiding BIG_PENALTY plateaus.
+    """
+    # primary term: C1/C2 violations (aggregate, lane-level)
+    c12_pen7 = c12_violation_aggregate(i7_seqs, L7, min_green, min_blue, max_dark, strict_blue=True)
+    c12_pen5 = c12_violation_aggregate(i5_seqs, L5, min_green, min_blue, max_dark, strict_blue=True)
+    c12_total = c12_pen7 + c12_pen5
+
+    # secondary term: ≥C3 weighted penalties
     pen7 = weighted_penalty(i7_seqs, L7, min_green, min_blue, max_dark, w7)
     pen5 = weighted_penalty(i5_seqs, L5, min_green, min_blue, max_dark, w5)
-    return pen7 + pen5
+
+    return c12_weight * c12_total + (pen7 + pen5)
 
 def initial_round_robin(items: List[Dict[str, str]], lanes: int) -> List[List[Dict[str, str]]]:
     buckets = [[] for _ in range(lanes)]
@@ -359,8 +399,14 @@ def optimize_assignment(
     seed: int,
     min_green: float, min_blue: float, max_dark: float,
     w7: List[float],
-    w5: List[float]
+    w5: List[float],
+    c12_weight: float = 1e6
 ) -> List[List[Dict[str, str]]]:
+    """
+    Random swap optimizer with lexicographic cost:
+      - Prioritize reducing C1/C2 total violations across lanes (i7+i5).
+      - Once zero, further optimize ≥C3 weighted penalties.
+    """
     random.seed(seed)
     lanes = len(buckets)
 
@@ -368,7 +414,12 @@ def optimize_assignment(
         i7 = [r["i7"][:L7] for r in buck]
         i5s = [revcomp(r["i5"]) if rc_i5 else r["i5"] for r in buck]
         i5 = [s[:L5] for s in i5s]
-        return lane_cost_with_hard(i7, i5, L7, L5, min_green, min_blue, max_dark, w7, w5)
+        return lane_cost_with_hard(
+            i7, i5, L7, L5,
+            min_green, min_blue, max_dark,
+            w7, w5,
+            c12_weight=c12_weight
+        )
 
     lane_scores = [cost(b) for b in buckets]
     total = sum(lane_scores)
@@ -394,6 +445,7 @@ def optimize_assignment(
             lane_scores[a], lane_scores[b] = new_a, new_b
             total = new_total
         else:
+            # revert
             buckets[a][ia], buckets[b][ib] = ra, rb
 
     return buckets
@@ -412,7 +464,7 @@ def print_per_cycle_list(per_cycle: List[Dict[str, Any]], indent: str = "  ") ->
         print(f"{indent}  #{pc['cycle']:>2}  {fmt_color_triplet(pc['color'])}  [{'PASS' if pc['ok'] else 'FAIL'}]")
 
 def print_check_human(tag: str, rep: Dict[str, Any], min_green: float, min_blue: float, max_dark: float) -> None:
-    print(f"{tag}: {fmt_bool(rep['hard_ok'])}  (HARD: cycles 1-2 must pass)")
+    print(f"{tag}: {fmt_bool(rep['hard_ok'])}  (HARD report: cycles 1-2 must pass)")
     # c1/c2 details
     c1, c2 = rep["hard_c12"]
     if c1 is not None:
@@ -508,17 +560,18 @@ def cmd_group(args):
     L7 = effective_cycles(items, "i7", L7_req)
     L5 = effective_cycles(items, "i5", L5_req)
 
-    # weights for optimization
+    # weights for optimization (≥C3)
     w7 = make_weights_special(L7, args.w34)
     w5 = make_weights_special(L5, args.w34)
 
-    # initial buckets + optimize (hard C1-2 + weighted ≥3)
+    # initial buckets + optimize (feasibility-first on C1/C2 + weighted ≥3)
     buckets = initial_round_robin(items, args.lanes)
     buckets = optimize_assignment(
         buckets, L7=L7, L5=L5, rc_i5=args.rc_i5,
         iters=args.iters, seed=args.seed,
         min_green=args.min_green, min_blue=args.min_blue, max_dark=args.max_dark,
-        w7=w7, w5=w5
+        w7=w7, w5=w5,
+        c12_weight=args.c12_weight
     )
 
     # per-lane reports + optional CSV
@@ -559,17 +612,28 @@ def cmd_group(args):
     if args.out:
         p = Path(args.out)
         p.parent.mkdir(parents=True, exist_ok=True)
+
+        # 重新读取输入文件，获得原始 id 顺序
+        original_items = read_table(args.input)
+        id_order = [r["id"] for r in original_items]
+
+        # 建立 id -> (lane, i7, i5) 映射
+        lane_map = {r["id"]: (lane_id, r["i7"], r["i5"])
+                    for lane_id, buck in enumerate(buckets, start=1)
+                    for r in buck}
+
         with p.open("w", newline="") as f:
             w = csv.DictWriter(f, fieldnames=["lane", "id", "i7", "i5"])
             w.writeheader()
-            for row in out_rows:
-                w.writerow(row)
+            for id_ in id_order:  # 按输入文件的顺序写出
+                lane, i7, i5 = lane_map[id_]
+                w.writerow({"lane": lane, "id": id_, "i7": i7, "i5": i5})
 
 # -------------------- CLI --------------------
 
 def build_parser():
     p = argparse.ArgumentParser(
-        description="Index color-balance checker and lane balancer (2-color; hard C1-2; weighted ≥3; per-cycle outputs)."
+        description="Index color-balance checker and lane balancer (2-color; feasibility-first on C1-2; weighted ≥3; per-cycle outputs)."
     )
     sub = p.add_subparsers(dest="cmd", required=True)
 
@@ -586,10 +650,10 @@ def build_parser():
         a.add_argument("--min-green", type=float, default=0.25,
                        help="Min green fraction per cycle (default 0.25)")
         a.add_argument("--min-blue", type=float, default=0.05,
-                       help="Min blue fraction per cycle (default 0.05)")
+                       help="Min blue fraction per cycle (default 0.05; hard check uses '> min_blue')")
         a.add_argument("--max-dark", type=float, default=0.40,
                        help="Max dark fraction per cycle (default 0.40)")
-        # weighting
+        # weighting for ≥C3
         a.add_argument("--w34", type=float, default=0.60,
                        help="Total weight assigned to cycles 3/4 (even split). Remaining weight goes to 5..N (default 0.60).")
         # orientation
@@ -597,17 +661,19 @@ def build_parser():
                        help="Reverse-complement i5 before evaluating (default: OFF)")
 
     # check
-    pc = sub.add_parser("check", help="Check color balance with hard C1-2 and weighted ≥3 cycles; print per-cycle results.")
+    pc = sub.add_parser("check", help="Check color balance with hard C1-2 (report) and weighted ≥3; print per-cycle results.")
     add_common(pc)
     pc.set_defaults(func=cmd_check)
 
     # group
-    pg = sub.add_parser("group", help="Assign libraries into lanes (hard C1-2 + weighted ≥3); print per-cycle results per lane.")
+    pg = sub.add_parser("group", help="Assign libraries into lanes (feasibility-first on C1-2 + weighted ≥3); print per-cycle results per lane.")
     add_common(pg)
     pg.add_argument("--lanes", type=int, required=True, help="Number of lanes")
     pg.add_argument("--iters", type=int, default=20000,
                     help="Swap iterations for optimization (default 20000)")
     pg.add_argument("--seed", type=int, default=42, help="Random seed (default 42)")
+    pg.add_argument("--c12-weight", type=float, default=1e6,
+                    help="Priority weight for cycles 1/2 violations (lexicographic objective). Larger enforces feasibility-first harder. (default 1e6)")
     pg.add_argument("--out", type=str, default="",
                     help="Write lane assignment to CSV (columns: lane,id,i7,i5)")
     pg.set_defaults(func=cmd_group)
