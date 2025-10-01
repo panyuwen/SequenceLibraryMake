@@ -28,10 +28,10 @@ i5 is NOT reverse-complemented by default. Use --rc-i5 if needed.
 
 easy run:
   python index_balance.py group library.csv --lanes 2 --out lanes.csv 
-  # library.csv is a csv/tsv/xlsx with headers: id,i7,i5
+  # library.csv is a csv/tsv/xlsx with headers: id,i7,i5,[ratio=1,type=ALL]
 
   python index_balance.py check lanes.csv 
-  # lanes.csv is a csv/tsv/xlsx with headers: id,i7,i5
+  # lanes.csv is a csv/tsv/xlsx with headers: id,i7,i5,[ratio=1,lane=ALL]
 
 Outputs (human-readable):
   - check: overall info + per-cycle color fractions and pass/fail for i7 and i5
@@ -54,9 +54,10 @@ def revcomp(seq: str) -> str:
     comp = str.maketrans("ACGTNacgtn", "TGCANtgcan")
     return seq.translate(comp)[::-1]
 
-def read_table(path: str) -> List[Dict[str, str]]:
+
+def read_table(path: str, col_name: str) -> List[Dict[str, str]]:
     """
-    Read CSV/TSV or XLSX with headers id,i7,i5[,type]; handle CSV BOM; trim header whitespace.
+    Read CSV/TSV or XLSX with headers id,i7,i5[,ratio][,type/,lane]; handle CSV BOM; trim header whitespace.
     - CSV/TSV: auto delimiter by suffix (.csv => ',', otherwise '\t'), encoding='utf-8-sig'
     - XLSX/XLSM: use openpyxl, read the first sheet's first non-empty row as headers
     """
@@ -107,7 +108,7 @@ def read_table(path: str) -> List[Dict[str, str]]:
                 idx = colmap[col]
                 v = "" if idx >= len(row) or row[idx] is None else str(row[idx])
                 return v.strip()
-            rec = {"id": get("id"), "i7": get("i7").upper(), "i5": get("i5").upper(), "type": (get("type") or "NA")}
+            rec = {"id": get("id"), "i7": get("i7").upper(), "i5": get("i5").upper(), "ratio": float(get("ratio") or 1), col_name: (get(col_name) or "ALL")}
             # 跳过完全空行
             if not (rec["id"] or rec["i7"] or rec["i5"]):
                 continue
@@ -132,82 +133,18 @@ def read_table(path: str) -> List[Dict[str, str]]:
                 "id": (row.get("id") or row.get("ID") or "").strip(),
                 "i7": (row.get("i7") or row.get("I7") or "").strip().upper(),
                 "i5": (row.get("i5") or row.get("I5") or "").strip().upper(),
-                "type": (row.get("type") or row.get("TYPE") or row.get("Type") or "NA").strip()
+                "ratio": float((row.get("ratio") or '1').strip()),
+                col_name: (row.get(col_name) or "ALL").strip()
             })
     return items
 
 
+def read_table_group(path: str) -> List[Dict[str, str]]:
+    return read_table(path, "type")
+
+
 def read_table_check(path: str) -> List[Dict[str, str]]:
-    """
-    专供 `check` 子命令使用。
-    允许输入为 3 列 (id,i7,i5) 或 4 列 (id,i7,i5,lane)。
-    - 始终返回 id,i7,i5 字段；
-    - 如果表头含 lane，则附加 "lane" 字段（空值允许）；
-    - 忽略 type（check 不需要 type）。
-    """
-    import csv, os
-    from pathlib import Path
-    p = Path(path)
-    if not p.exists():
-        raise FileNotFoundError(path)
-
-    if p.suffix.lower() in (".xlsx", ".xlsm", ".xltx", ".xltm"):
-        try:
-            import openpyxl  # type: ignore
-        except Exception as e:
-            raise RuntimeError("Reading XLSX requires openpyxl") from e
-        wb = openpyxl.load_workbook(str(p), read_only=True, data_only=True)
-        ws = wb.active
-        rows = list(ws.iter_rows(values_only=True))
-        if not rows:
-            return []
-        header = [str(x).strip() if x is not None else "" for x in rows[0]]
-        idx = {h.lower(): i for i, h in enumerate(header)}
-        need = ["id", "i7", "i5"]
-        if not all(k in idx for k in need):
-            raise ValueError("check input must have headers id,i7,i5[,lane]")
-
-        has_lane = "lane" in idx
-        out = []
-        for r in rows[1:]:
-            if r is None:
-                continue
-            rid = (r[idx["id"]] or "").strip()
-            i7  = (r[idx["i7"]] or "").strip().upper()
-            i5  = (r[idx["i5"]] or "").strip().upper()
-            if not rid:
-                continue
-            rec = {"id": rid, "i7": i7, "i5": i5}
-            if has_lane:
-                rec["lane"] = str(r[idx["lane"]] or "").strip()
-            out.append(rec)
-        return out
-
-    # CSV / TSV
-    with open(p, "r", encoding="utf-8") as f:
-        sniffer = csv.Sniffer()
-        sample = f.read(2048)
-        f.seek(0)
-        dialect = sniffer.sniff(sample) if sample else csv.excel
-        reader = csv.DictReader(f, dialect=dialect)
-        # 允许 lane 可选
-        required = {"id", "i7", "i5"}
-        if not required.issubset({(h or "").strip().lower() for h in reader.fieldnames or []}):
-            raise ValueError("check input must have headers id,i7,i5[,lane]")
-        has_lane = any((h or "").strip().lower() == "lane" for h in (reader.fieldnames or []))
-
-        out = []
-        for row in reader:
-            rid = (row.get("id") or row.get("ID") or "").strip()
-            i7  = (row.get("i7") or row.get("I7") or "").strip().upper()
-            i5  = (row.get("i5") or row.get("I5") or "").strip().upper()
-            if not rid:
-                continue
-            rec = {"id": rid, "i7": i7, "i5": i5}
-            if has_lane:
-                rec["lane"] = (row.get("lane") or row.get("LANE") or row.get("Lane") or "").strip()
-            out.append(rec)
-        return out
+    return read_table(path, "lane")
 
 
 def validate_indexes(items: List[Dict[str, str]]) -> None:
@@ -220,6 +157,7 @@ def validate_indexes(items: List[Dict[str, str]]) -> None:
                 if ch not in "ACGTN":
                     raise ValueError(f"{r['id']} {k} contains invalid base '{ch}'. Only A/C/G/T/N allowed.")
 
+
 def effective_cycles(items: List[Dict[str, str]], which: str, requested: int) -> int:
     """Use min(requested, min_length_across_items)."""
     min_len = min(len(r[which]) for r in items) if items else 0
@@ -227,9 +165,9 @@ def effective_cycles(items: List[Dict[str, str]], which: str, requested: int) ->
 
 
 # -------------------- Lane constraints (types & must-include) --------------------
-# -------------------- Lane constraints (types & must-include) --------------------
 from pathlib import Path as _Path_for_constraints
 import json as _json_for_constraints
+
 
 def _try_load_yaml(path: str):
     try:
@@ -238,6 +176,7 @@ def _try_load_yaml(path: str):
         return None, "PyYAML not installed"
     with open(path, 'r', encoding='utf-8') as f:
         return yaml.safe_load(f), None
+
 
 def load_constraints(path: str) -> dict:
     p = _Path_for_constraints(path)
@@ -257,6 +196,7 @@ def load_constraints(path: str) -> dict:
         raise ValueError("Constraints must have top-level 'lanes' mapping")
     return data
 
+
 def normalize_constraints(data: dict):
     lanes_cfg = data["lanes"]
     lane_ids = sorted(int(k) for k in lanes_cfg.keys())
@@ -274,9 +214,10 @@ def normalize_constraints(data: dict):
         lane_must[lid] = set(str(s) for s in must)
     return lane_ids, lane_quotas, lane_must
 
+
 def check_quota_feasibility(items: list, lane_ids, lane_quotas):
     from collections import Counter
-    avail = Counter([r.get("type", "NA") for r in items])
+    avail = Counter([r.get("type", "ALL") for r in items])
     need_total = {}
     for lid in lane_ids:
         for t, c in lane_quotas[lid].items():
@@ -287,12 +228,13 @@ def check_quota_feasibility(items: list, lane_ids, lane_quotas):
         if avail.get(t, 0) < need:
             raise ValueError(f"Not enough samples of type '{t}': need {need}, available {avail.get(t,0)}.")
 
+
 def initial_buckets_with_quotas(items: list, lane_ids, lane_quotas, lane_must):
     from collections import defaultdict, deque
     id_map = {r["id"]: r for r in items}
     pools = defaultdict(list)
     for r in items:
-        pools[r.get("type", "NA")].append(r)
+        pools[r.get("type", "ALL")].append(r)
     for t in pools:
         pools[t].sort(key=lambda r: (r["i7"] + "_" + r["i5"], r["id"]))
         pools[t] = deque(pools[t])
@@ -306,7 +248,7 @@ def initial_buckets_with_quotas(items: list, lane_ids, lane_quotas, lane_must):
             if sid not in id_map:
                 raise ValueError(f"lane {lid} must_include sample '{sid}' not found in input.")
             r = id_map[sid]
-            tt = r.get("type", "NA")
+            tt = r.get("type", "ALL")
             if remaining[lid].get(tt, 0) <= 0:
                 raise ValueError(f"lane {lid} has no remaining quota for type '{tt}' to place must_include '{sid}'.")
             buckets[lid].append(r)
@@ -327,17 +269,33 @@ def initial_buckets_with_quotas(items: list, lane_ids, lane_quotas, lane_must):
 
 # -------------------- Color math --------------------
 
-def per_cycle_base_lists(seqs: List[str], L: int) -> List[List[str]]:
-    """Collect bases per cycle (ignore N)."""
-    cycles = [[] for _ in range(L)]
-    for s in seqs:
+def per_cycle_base_lists(seqs: List[str], ratios: List[float], L: int) -> List[Dict[str, float]]:
+    """
+    Collect bases per cycle (ignore N).
+    weighted by ratios
+    """
+    cycles = [{'A': 0, 'C': 0, 'G': 0, 'T': 0} for _ in range(L)]
+
+    for j in range(len(seqs)):
+        s = seqs[j]
+        r = ratios[j]
+
         for i in range(L):
             b = s[i]
             if b in BASES:
-                cycles[i].append(b)
+                cycles[i][b] += r
+    
+    for i in range(L):
+        tot = sum(cycles[i].values())
+        if tot == 0:
+            continue
+        for b in BASES:
+            cycles[i][b] /= tot
+
     return cycles
 
-def color_fractions_one_cycle(base_list: List[str]) -> Dict[str, float]:
+
+def color_fractions_one_cycle(base_list: Dict[str, float]) -> Dict[str, float]:
     """
     2-color mapping:
       T: green only
@@ -346,20 +304,21 @@ def color_fractions_one_cycle(base_list: List[str]) -> Dict[str, float]:
       G: dark
     Each base contributes up to 2 "signal units".
     """
-    a = base_list.count('A')
-    t = base_list.count('T')
-    c = base_list.count('C')
-    g = base_list.count('G')
+    a, t, c, g = base_list['A'], base_list['T'], base_list['C'], base_list['G']
+
     tot_units = 2 * (a + t + c + g)
     if tot_units == 0:
         return {"green": 0.0, "blue": 0.0, "dark": 0.0}
+    
     green = (t * 2.0 + c * 1.0) / tot_units
     blue  = (a * 2.0 + c * 1.0) / tot_units
     dark  = (g * 2.0) / tot_units
     return {"green": green, "blue": blue, "dark": dark}
 
+
 def hard_cycles_ok_aggregate(
     seqs: List[str],
+    ratios: List[float],
     L: int,
     min_green: float,
     min_blue: float,
@@ -369,7 +328,7 @@ def hard_cycles_ok_aggregate(
     Check hard constraints for cycle 1 and 2 on the aggregate (lane-level / batch-level).
     Returns (ok, [c1_color, c2_color]) where entries may be None if L<cycle.
     """
-    blists = per_cycle_base_lists(seqs, L)
+    blists = per_cycle_base_lists(seqs, ratios, L)
     colors_12: List[Optional[Dict[str, float]]] = [None, None]
     for idx in (0, 1):  # cycles 1 and 2
         if L > idx:
@@ -379,6 +338,7 @@ def hard_cycles_ok_aggregate(
             if not ok:
                 return False, colors_12
     return True, colors_12
+
 
 def make_weights_special(L: int, w34: float) -> List[float]:
     """
@@ -416,8 +376,10 @@ def make_weights_special(L: int, w34: float) -> List[float]:
         w = [x / total for x in w]
     return w
 
+
 def weighted_penalty(
     seqs: List[str],
+    ratios: List[float],
     L: int,
     min_green: float,
     min_blue: float,
@@ -427,7 +389,7 @@ def weighted_penalty(
     """Sum_i weights[i]*vi, where vi is threshold violation at cycle i (cycles 1-2 weights should be 0)."""
     if L <= 0 or not seqs or not weights:
         return 0.0
-    blists = per_cycle_base_lists(seqs, L)
+    blists = per_cycle_base_lists(seqs, ratios, L)
     pen = 0.0
     for i in range(min(L, len(weights))):
         if weights[i] == 0.0:
@@ -444,6 +406,7 @@ def weighted_penalty(
 
 def c12_violation_aggregate(
     seqs: List[str],
+    ratios: List[float],
     L: int,
     min_green: float,
     min_blue: float,
@@ -458,7 +421,7 @@ def c12_violation_aggregate(
     if not seqs or L <= 0:
         return 0.0
     EPS = 1e-9 if strict_blue else 0.0
-    blists = per_cycle_base_lists(seqs, L)
+    blists = per_cycle_base_lists(seqs, ratios, L)
     pen = 0.0
     for idx in (0, 1):  # cycles 1 and 2
         if L > idx:
@@ -470,8 +433,10 @@ def c12_violation_aggregate(
             pen += v
     return pen
 
+
 def evaluate_color_balance_strict_weighted(
     seqs: List[str],
+    ratios: List[float],
     cycles: int,
     min_green: float,
     min_blue: float,
@@ -485,10 +450,10 @@ def evaluate_color_balance_strict_weighted(
       - Report weighted penalty over cycles >=3 using make_weights_special(cycles, w34).
     """
     # hard constraints on C1/C2 (for reporting)
-    hard_ok, colors_12 = hard_cycles_ok_aggregate(seqs, cycles, min_green, min_blue, max_dark)
+    hard_ok, colors_12 = hard_cycles_ok_aggregate(seqs, ratios, cycles, min_green, min_blue, max_dark)
 
     # per-cycle info
-    blists = per_cycle_base_lists(seqs, cycles)
+    blists = per_cycle_base_lists(seqs, ratios, cycles)
     per_cycle: List[Dict[str, Any]] = []
     worst = None
     worst_score = -1.0
@@ -514,7 +479,7 @@ def evaluate_color_balance_strict_weighted(
 
     # weighted penalty over cycles >=3
     weights = make_weights_special(cycles, w34)
-    wpen = weighted_penalty(seqs, cycles, min_green, min_blue, max_dark, weights)
+    wpen = weighted_penalty(seqs, ratios, cycles, min_green, min_blue, max_dark, weights)
 
     return {
         "cycles": cycles,
@@ -532,6 +497,7 @@ def evaluate_color_balance_strict_weighted(
 def lane_cost_with_hard(
     i7_seqs: List[str],
     i5_seqs: List[str],
+    ratios: List[float],
     L7: int, L5: int,
     min_green: float, min_blue: float, max_dark: float,
     w7: List[float],
@@ -549,15 +515,16 @@ def lane_cost_with_hard(
     is strictly preferred over any infeasible one, while avoiding BIG_PENALTY plateaus.
     """
     # primary term: C1/C2 violations (aggregate, lane-level)
-    c12_pen7 = c12_violation_aggregate(i7_seqs, L7, min_green, min_blue, max_dark, strict_blue=True)
-    c12_pen5 = c12_violation_aggregate(i5_seqs, L5, min_green, min_blue, max_dark, strict_blue=True)
+    c12_pen7 = c12_violation_aggregate(i7_seqs, ratios, L7, min_green, min_blue, max_dark, strict_blue=True)
+    c12_pen5 = c12_violation_aggregate(i5_seqs, ratios, L5, min_green, min_blue, max_dark, strict_blue=True)
     c12_total = c12_pen7 + c12_pen5
 
     # secondary term: ≥C3 weighted penalties
-    pen7 = weighted_penalty(i7_seqs, L7, min_green, min_blue, max_dark, w7)
-    pen5 = weighted_penalty(i5_seqs, L5, min_green, min_blue, max_dark, w5)
+    pen7 = weighted_penalty(i7_seqs, ratios, L7, min_green, min_blue, max_dark, w7)
+    pen5 = weighted_penalty(i5_seqs, ratios, L5, min_green, min_blue, max_dark, w5)
 
     return c12_weight * c12_total + (pen7 + pen5)
+
 
 def initial_round_robin(items: List[Dict[str, str]], lanes: int) -> List[List[Dict[str, str]]]:
     buckets = [[] for _ in range(lanes)]
@@ -565,6 +532,7 @@ def initial_round_robin(items: List[Dict[str, str]], lanes: int) -> List[List[Di
     for i, r in enumerate(keyed):
         buckets[i % lanes].append(r)
     return buckets
+
 
 def optimize_assignment(
     buckets: List[List[Dict[str, str]]],
@@ -592,13 +560,14 @@ def optimize_assignment(
         i7 = [r["i7"][:L7] for r in buck]
         i5s = [revcomp(r["i5"]) if rc_i5 else r["i5"] for r in buck]
         i5 = [s[:L5] for s in i5s]
+        ratios = [r["ratio"] for r in buck]
+
         return lane_cost_with_hard(
-            i7, i5, L7, L5,
+            i7, i5, ratios, L7, L5,
             min_green, min_blue, max_dark,
             w7, w5,
             c12_weight=c12_weight
         )
-
 
     lane_scores = [cost(b) for b in buckets]
     total = sum(lane_scores)
@@ -733,7 +702,7 @@ def cmd_check(args):
     def lane_str(x): return str(x).strip()
     has_lane = any(("lane" in r and lane_str(r.get("lane","")) != "") for r in items)
 
-    def evaluate_and_print(sub_items, lanes_label="N/A"):
+    def evaluate_and_print(sub_items, lanes_label="ALL"):
         # cycles (clip to available for this subset)
         L7_req = args.i7_cycles if args.i7_cycles is not None else args.cycles
         L5_req = args.i5_cycles if args.i5_cycles is not None else args.cycles
@@ -744,14 +713,16 @@ def cmd_check(args):
         i5raw = [r["i5"] for r in sub_items]
         i5 = [(revcomp(s) if args.rc_i5 else s)[:L5] for s in i5raw]
 
-        rep7 = evaluate_color_balance_strict_weighted(i7, L7, args.min_green, args.min_blue, args.max_dark, args.w34)
-        rep5 = evaluate_color_balance_strict_weighted(i5, L5, args.min_green, args.min_blue, args.max_dark, args.w34)
+        ratio_list = [r["ratio"] for r in sub_items]
+
+        rep7 = evaluate_color_balance_strict_weighted(i7, ratio_list, L7, args.min_green, args.min_blue, args.max_dark, args.w34)
+        rep5 = evaluate_color_balance_strict_weighted(i5, ratio_list, L5, args.min_green, args.min_blue, args.max_dark, args.w34)
 
         report = {
             "lanes": 1,
             "cycles": {"i7": L7, "i5": L5},
             "lane_reports": [{
-                "lane": lanes_label if isinstance(lanes_label, int) else 1,
+                "lane": lanes_label ,
                 "n_libraries": len(sub_items),
                 "i7": rep7,
                 "i5": rep5,
@@ -772,8 +743,9 @@ def cmd_check(args):
         print("=== CHECK for all libraries (no lane column) ===")
         evaluate_and_print(items, lanes_label="ALL")
 
+
 def cmd_group(args):
-    items = read_table(args.input)
+    items = read_table_group(args.input)
     validate_indexes(items)
 
     L7_req = args.i7_cycles if args.i7_cycles is not None else args.cycles
@@ -829,8 +801,10 @@ def cmd_group(args):
         i5raw = [r["i5"] for r in buck]
         i5 = [(revcomp(s) if args.rc_i5 else s)[:L5] for s in i5raw]
 
-        rep7 = evaluate_color_balance_strict_weighted(i7, L7, args.min_green, args.min_blue, args.max_dark, args.w34)
-        rep5 = evaluate_color_balance_strict_weighted(i5, L5, args.min_green, args.min_blue, args.max_dark, args.w34)
+        ratios = [r["ratio"] for r in buck]
+
+        rep7 = evaluate_color_balance_strict_weighted(i7, ratios, L7, args.min_green, args.min_blue, args.max_dark, args.w34)
+        rep5 = evaluate_color_balance_strict_weighted(i5, ratios, L5, args.min_green, args.min_blue, args.max_dark, args.w34)
 
         # type counts per lane
         type_counts = {}
@@ -867,20 +841,20 @@ def cmd_group(args):
         p.parent.mkdir(parents=True, exist_ok=True)
 
         # 重新读取输入文件，获得原始 id 顺序
-        original_items = read_table(args.input)
+        original_items = read_table_group(args.input)
         id_order = [r["id"] for r in original_items]
 
         # 建立 id -> (lane, i7, i5) 映射
-        lane_map = {r["id"]: (lane_id, r["i7"], r["i5"])
+        lane_map = {r["id"]: (lane_id, r["i7"], r["i5"], r["ratio"], r["type"])
                     for lane_id, buck in enumerate(buckets, start=1)
                     for r in buck}
 
         with p.open("w", newline="") as f:
-            w = csv.DictWriter(f, fieldnames=["id", "i7", "i5", "lane"])
+            w = csv.DictWriter(f, fieldnames=["id", "i7", "i5", "ratio", "lane", "type"])
             w.writeheader()
             for id_ in id_order:  # 按输入文件的顺序写出
-                lane, i7, i5 = lane_map[id_]
-                w.writerow({"id": id_, "i7": i7, "i5": i5, "lane": lane})
+                lane, i7, i5, ratio, type = lane_map[id_]
+                w.writerow({"id": id_, "i7": i7, "i5": i5, "ratio": ratio, "lane": lane, "type": type})
 
 # -------------------- CLI --------------------
 
@@ -891,7 +865,7 @@ def build_parser():
     sub = p.add_subparsers(dest="cmd", required=True)
 
     def add_common(a):
-        a.add_argument("input", help="Input CSV/TSV/XLSX with columns: id,i7,i5[,type]")
+        a.add_argument("input", help="Input (GROUP: id,i7,i5,ratio,type | CHECK: id,i7,i5,ratio,lane) in CSV/TSV/XLSX")
         # cycles control
         a.add_argument("--cycles", type=int, default=8,
                        help="Number of cycles to evaluate for BOTH i7 and i5 (default 8)")
@@ -914,12 +888,12 @@ def build_parser():
                        help="Reverse-complement i5 before evaluating (default: OFF)")
 
     # check
-    pc = sub.add_parser("check", help="Check color balance with hard C1-2 (report) and weighted ≥3; print per-cycle results.")
+    pc = sub.add_parser("check", help="Check ratio-weighted color balance with hard C1-2 (report) and weighted ≥3; print per-cycle results. Input: id,i7,i5,ratio,lane")
     add_common(pc)
     pc.set_defaults(func=cmd_check)
 
     # group
-    pg = sub.add_parser("group", help="Assign libraries into lanes (feasibility-first on C1-2 + weighted ≥3); print per-cycle results per lane.")
+    pg = sub.add_parser("group", help="Assign libraries into lanes with ratio-weighted color balance (feasibility-first on C1-2 + weighted ≥3); print per-cycle results per lane. Input: id,i7,i5,ratio,type")
     add_common(pg)
     pg.add_argument("--lanes", type=int, required=False, default=0, help="Number of lanes (optional if --constraints provided)")
     pg.add_argument("--constraints", type=str, default="",
