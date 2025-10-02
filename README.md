@@ -47,9 +47,9 @@ python index_balance_v2.py group library.tsv --constraints constrain.json --out 
   }
 }
 ```
-3 lanes    
-assign 8 samples from "type A", 4 samples from "type B", and 8 samples from "type C" to lane 1    
-assign 7 samples from "type A", 10 samples from "type B", and 9 samples from "type C" to lane 1. "sampleX" must be included    
+2 lanes    
+assign 8 samples of "type A", 4 samples of "type B", and 8 samples of "type C" to lane 1    
+assign 7 samples of "type A", 10 samples of "type B", and 9 samples of "type C" to lane 2. "sampleX" must be included.    
 
 - `must_include`: place the listed sample IDs into the given lane indices before optimization.  
 - `quotas`: request that each lane receive the specified number of samples (pre‑grouping). The optimizer fills remaining slots while balancing indices.
