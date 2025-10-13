@@ -56,7 +56,7 @@ library.tsv \
 --lanes 3 \
 --out lanes_assign.csv \
 --rc-i5 \
-[--cycles 8 --iters 20000 --seed 42]
+[--cycles 8 --iters 20000 --seed 42] ## find the explanation of --rc-i5 below
 ```
 
 **With constraints (JSON or YAML):**
@@ -66,7 +66,7 @@ library.tsv \
 --constraints constrain.json \
 --out lanes_assign.csv \
 --rc-i5 \
-[--cycles 8 --iters 20000 --seed 42]
+[--cycles 8 --iters 20000 --seed 42] ## find the explanation of --rc-i5 below
 ```
 
 **Input columns (Group):**
@@ -94,7 +94,9 @@ assign 7 samples of "type A", 10 samples of "type B", and 9 samples of "type C" 
 
 ### 2) Check (evaluate existing lane assignments)
 ```bash
-python index_balance_v2.py check lanes_assign.csv --rc-i5
+python index_balance_v2.py check \
+lanes_assign.csv \
+--rc-i5 ## find the explanation of --rc-i5 below
 ```
 **Input columns (Check):**
 
