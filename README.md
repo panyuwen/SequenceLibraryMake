@@ -1,3 +1,31 @@
+## Table of Contents
+- [Index Balance Tool](#index-balance-tool)
+  - [Overview](#overview)
+  - [Key Features](#key-features)
+  - [Usage](#usage)
+    - [1) Group (optimize assignment across N lanes)](#1-group-optimize-assignment-across-n-lanes)
+    - [2) Check (evaluate existing lane assignments)](#2-check-evaluate-existing-lane-assignments)
+    - [Common options](#common-options)
+  - [Calculation Method](#calculation-method)
+    - [Base‑to‑color mapping (Illumina 2‑channel chemistry)](#basetocolor-mapping-illumina-2channel-chemistry)
+    - [C1/C2 feasibility (cycles 1 and 2 only)](#c1c2-feasibility-cycles-1-and-2-only)
+    - [≥C3 balance penalty](#c3-balance-penalty)
+    - [Lane cost & optimization](#lane-cost--optimization)
+  - [Notes](#notes)
+- [Pool Assist Tool](#pool-assist-tool)
+  - [Overview](#overview)
+  - [Usage](#usage)
+    - [Input file format](#input-file-format)
+    - [Output](#output)
+  - [Fixed Parameters (in script)](#fixed-parameters-in-script)
+  - [Notes](#notes)
+- [Understanding Index Orientation in NovaSeq X / X Plus](#understanding-index-orientation-in-novaseq-x--x-plus)
+  - [Example 1 — *i7* (Index Read 1)](#example-1--i7-index-read-1)
+  - [Example 2 — *i5* (Index Read 2)](#example-2--i5-index-read-2)
+  - [Summary Table](#summary-table)
+    
+    
+    
 # Index Balance Tool
 
 ## Overview
@@ -221,7 +249,7 @@ NovaSeq X and X Plus operate exclusively in the **Reverse-Complement (RC) workfl
 
 ---
 
-## ✅ Summary Table
+## Summary Table
 
 | Index | Adapter orientation | Sequencing direction (NovaSeq X) | For balance analysis | For demultiplexing |
 |:--|:--|:--|:--|:--|
