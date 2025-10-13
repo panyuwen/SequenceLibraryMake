@@ -23,12 +23,22 @@ The main capabilities include:
 
 **Without constraints:**
 ```bash
-python index_balance_v2.py group library.tsv --lanes 3 --out lanes_assign.csv [--cycles 8 --iters 20000 --seed 42]
+python index_balance_v2.py group \
+library.tsv \
+--lanes 3 \
+--out lanes_assign.csv \
+--rc-i5 \
+[--cycles 8 --iters 20000 --seed 42]
 ```
 
 **With constraints (JSON or YAML):**
 ```bash
-python index_balance_v2.py group library.tsv --constraints constrain.json --out lanes_assign.csv [--cycles 8 --iters 20000 --seed 42]
+python index_balance_v2.py group \
+library.tsv \
+--constraints constrain.json \
+--out lanes_assign.csv \
+--rc-i5 \
+[--cycles 8 --iters 20000 --seed 42]
 ```
 
 **Input columns (Group):**
@@ -56,7 +66,7 @@ assign 7 samples of "type A", 10 samples of "type B", and 9 samples of "type C" 
 
 ### 2) Check (evaluate existing lane assignments)
 ```bash
-python index_balance_v2.py check lanes_assign.csv
+python index_balance_v2.py check lanes_assign.csv --rc-i5
 ```
 **Input columns (Check):**
 
