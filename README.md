@@ -171,3 +171,65 @@ python pool_assist.py <input_file.xlsx> <output_file.txt>
 - Ratios are normalized per lane.  
 - All samples within a lane share the same final target volume (`V_aim`).  
 - Overflow scaling may lead to pipetting volumes below the minimum threshold.  
+
+
+---
+# Understanding Index Orientation in NovaSeq X / X Plus
+
+Illumina sequencing workflows differ in how they read the two index strands.  
+NovaSeq X and X Plus operate exclusively in the **Reverse-Complement (RC) workflow**, which affects the *i5* index orientation but not *i7*.
+    
+## Example 1 — *i7* (Index Read 1)
+
+**Full adapter sequence**  
+```
+5′-CAAGCAGAAGACGGCATACGAGAT CTACAGTG GTGACTGGAGTTCAGACGTGTGCTCTTCCGATC*T-3′
+```
+
+- The embedded **i7 index** in this adapter is present in the *reverse-complement* orientation (`CTACAGTG`).  
+- When sequenced in **Index Read 1**, the NovaSeq X instrument reads it in the **forward direction**, producing the **index read** `CACTGTAG`.  
+- Thus, the instrument “sees” the *forward* index sequence.  
+- For **index-balance analysis**, use the original index (`CACTGTAG`).  
+- For **demultiplexing**, both i7 and i5 need to be reverse-complemented to match the raw BCL reads.
+
+| Context | Direction seen by instrument | Correct form to use |
+|:--|:--|:--|
+| Adapter embedding | Reverse complement of index | — |
+| Sequencing read | Forward (CACTGTAG) | ✅ Use as is for balance |
+| Demultiplexing match | — | 🔁 Reverse complement both indices |
+
+---
+
+## Example 2 — *i5* (Index Read 2)
+
+**Full adapter sequence**  
+```
+5′-AATGATACGGCGACCACCGAGATCTACAC AAGCGACT ACACTCTTTCCCTACACGACGCTCTTCCGATC*T-3′
+```
+
+- The **i5 index** is embedded in the *forward* orientation (`AAGCGACT`) within the P5 adapter.  
+- Under the **RC workflow**, NovaSeq X reads this region in the *reverse-complement* direction, yielding `AGTCGCTT` during Index Read 2.  
+- Therefore, the instrument “sees” the **reverse complement** of the labeled i5 sequence.  
+- For **index-balance analysis**, use the reverse-complemented i5 (`AGTCGCTT`).  
+- For **demultiplexing**, again reverse-complement both i7 and i5 to match the instrument output.
+
+| Context | Direction seen by instrument | Correct form to use |
+|:--|:--|:--|
+| Adapter embedding | Forward (AAGCGACT) | — |
+| Sequencing read | Reverse complement (AGTCGCTT) | ✅ Use RC for balance |
+| Demultiplexing match | — | 🔁 Reverse complement both indices |
+
+---
+
+## ✅ Summary Table
+
+| Index | Adapter orientation | Sequencing direction (NovaSeq X) | For balance analysis | For demultiplexing |
+|:--|:--|:--|:--|:--|
+| i7 | Reverse complement | Forward | Original | Reverse complement |
+| i5 | Forward | Reverse complement | Reverse complement | Reverse complement |
+
+---
+
+**Key takeaway:**  
+> In NovaSeq X / X Plus (RC workflow), i7 is read in the forward direction, while i5 is read as its reverse complement.  
+> Consequently, both indices should be reverse-complemented for demultiplexing, but only i5 should be reverse-complemented for index-balance evaluation.
