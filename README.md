@@ -192,7 +192,8 @@ python pool_assist.py <input_file.xlsx> <output_file.txt>
 - `MIN_PIPETTE_UL = 1.0` → minimum pipettable volume in µL  
 - `SCALE_WHEN_OVERFLOW = False` → whether to rescale volumes if total exceeds aimed volume  
 - `ROUND_NDIGITS = 3` → decimal precision for reported volumes
-- 10 nM/µl → final concentration of the pooled library
+- `10 nM/µl` → final concentration of the pooled library
+- `v_raw < MIN_PIPETTE_UL & concentration ≥ 4 nM` → to dilute
 
 ---
 
