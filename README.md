@@ -1,4 +1,3 @@
-## Table of Contents
 - [Index Balance Tool](#index-balance-tool)
   - [Overview](#overview)
   - [Key Features](#key-features)
