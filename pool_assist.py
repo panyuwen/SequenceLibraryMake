@@ -89,13 +89,13 @@ def main():
 
     data['v_raw'] = data.apply(lambda x: safe_divide(x['Mi_nM_ul'], x['Calculated nM']), axis=1)
 
-    # 预稀释判定（仅当 v_raw < 1µL 且 C>=10nM）
+    # 预稀释判定（仅当 v_raw < 1µL 且 C>=4nM）
     def decide_predilute(row):
         v_raw = row['v_raw']
         C = row['Calculated nM']
         if pd.isna(v_raw):
             return pd.Series({'pre_dilute_required': 'NA', 'dilute_factor': 1, 'v_use': float('nan'), 'working_nM': float('nan')})
-        if (v_raw < MIN_PIPETTE_UL) and (C >= 10.0):
+        if (v_raw < MIN_PIPETTE_UL) and (C >= 4.0):
             d = ceil_div_volume(MIN_PIPETTE_UL, v_raw)
             v_use = v_raw * d
             working_nM = C / d
