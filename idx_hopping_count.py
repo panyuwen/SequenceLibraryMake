@@ -333,9 +333,7 @@ def main():
     print(f"Index hopping pairs: {invalid_count:,}")
     print("\nTop hopping pairs:")
     shown = 0
-    for (i7,i5), c in counts.most_common():
-        if (i7,i5) in valid_set:
-            continue
+    for (i7,i5), c in invalid_set.most_common():
         print(f"  ({i7},{i5})\t{c:,}")
         shown += 1
         if shown >= 10:
