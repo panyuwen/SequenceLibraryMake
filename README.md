@@ -22,7 +22,12 @@
   - [Example 1 — *i7* (Index Read 1)](#example-1--i7-index-read-1)
   - [Example 2 — *i5* (Index Read 2)](#example-2--i5-index-read-2)
   - [Summary Table](#summary-table)
-    
+- [Index Hopping Counter](#index-hopping-counter)
+  - [Overview](#overview)
+  - [Usage](#usage)
+    - [Parameters](#parameters)
+    - [Output Files](#output-files)
+  - [Notes](#notes)
     
     
 # Index Balance Tool
@@ -203,7 +208,7 @@ python pool_assist.py <input_file.xlsx> <output_file.txt>
 - Overflow scaling may lead to pipetting volumes below the minimum threshold.  
 
 
----
+
 # Understanding Index Orientation in NovaSeq X / X Plus
 
 Illumina sequencing workflows differ in how they read the two index strands.  
@@ -263,3 +268,73 @@ NovaSeq X and X Plus operate exclusively in the **Reverse-Complement (RC) workfl
 **Key takeaway:**  
 > In NovaSeq X / X Plus (RC workflow), i7 is read in the forward direction, while i5 is read as its reverse complement.  
 > Consequently, both indices should be reverse-complemented for demultiplexing, but only i5 should be reverse-complemented for index-balance evaluation.
+
+
+# Index Hopping Counter
+
+
+## Overview
+This tool calculates **index hopping events** within a lane by comparing observed barcode pairs from Undetermined FASTQ files to a list of valid index pairs.
+
+It supports:
+- Dual or single index libraries  
+- Automatic or manual trimming of barcode lengths  
+- Hamming distance–based mismatch tolerance (`--mismatch`)  
+- Classification of reads into:
+  - **valid** — matched known index pairs  
+  - **invalid** — both indices match known ones, but pair does not exist (index hopping)  
+  - **unknown** — cannot uniquely match within mismatch limit or contains `N`
+
+
+---
+
+## Usage
+
+### Basic command
+```bash
+python idx_hopping_count.py \
+  --r1 Undetermined_S0_L001_R1_001.fastq.gz \
+  --valid_pairs SampleSheet.csv \
+  --out_prefix lane1_hop
+```
+
+### With custom trimming or mismatch
+```bash
+python hop_from_reads_trimlen.py \
+  --r1 Undetermined_S0_L002_R1_001.fastq.gz \
+  --valid_pairs my_pairs.csv \
+  --len_i7 10 --len_i5 10 \
+  --mismatch 0
+```
+
+---
+
+### Parameters
+
+| Argument | Description | Default |
+|-----------|--------------|----------|
+| `--r1` | Undetermined R1 FASTQ file (gzipped) | *Required* |
+| `--valid_pairs` | CSV/TSV or Illumina SampleSheet containing valid i7/i5 combinations | *Required* |
+| `--len_i7`, `--len_i5` | Expected index lengths (trim observed barcodes before comparison) | 8 |
+| `--mismatch` | Allowed mismatches per index (Hamming distance) | 1 |
+| `--orientation` | Orientation handling: `auto`, `as_is`, `rc_i7`, `rc_i5`, `rc_both` | `rc_both` |
+| `--out_prefix` | Prefix for all output files | `hop_report` |
+| `--topn` | Top-N invalid pairs shown in console | 10 |
+
+---
+
+### Output Files
+
+| File | Description |
+|------|--------------|
+| `<prefix>.summary.tsv` | Summary statistics (valid/invalid/unknown counts, hopping rate) |
+| `<prefix>.invalid_pairs.csv` | Index-hopped pairs and their counts |
+
+
+---
+
+## Notes
+- Reads containing `N` in either index are automatically classified as *unknown*.  
+- Only dual indices where both sides uniquely match known index sets but form a non-existent pair are counted as *invalid*.  
+- Default mismatch logic (`--mismatch 1`) applies **independently** to i7 and i5.  
+
