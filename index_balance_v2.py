@@ -43,6 +43,7 @@ import csv
 import random
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
+from collections import Counter
 import openpyxl
 
 BASES = ("A", "C", "G", "T")
@@ -504,6 +505,19 @@ def lane_cost_with_hard(
     w5: List[float],
     c12_weight: float = 1e6
 ) -> float:
+
+    """
+    Calculate Lane cost.
+    Modified: Added Index conflict detection. If duplicate indexes exist, return a huge penalty.
+    """
+    # Simple conflict detection: Combine i7 and i5 to check for duplicates.
+    # Note: The seqs here are already truncated to the effective cycle length.
+    # If len(set) < len(list), it means duplicates exist.
+
+    combined_indexes = [s7 + "_" + s5 for s7, s5 in zip(i7_seqs, i5_seqs)]
+    if len(set(combined_indexes)) != len(combined_indexes):
+        return 1e12  # Return a massive penalty (much larger than c12_weight)
+
     """
     Lexicographic/feasibility-first cost:
       1) Minimize sum of C1/C2 violations (i7 + i5).
@@ -832,6 +846,53 @@ def cmd_group(args):
         "lane_reports": lane_reports,
         "all_lanes_hard_pass": all_hard_pass
     }
+
+
+    # ==================== [New] Final Index Conflict Check Start ====================
+    print("\n=== Final Conflict Check ===")
+    conflict_found = False
+    
+    for i, bucket in enumerate(buckets):
+        lane_num = i + 1
+        # Extract all (i7_seq, i5_seq) for the current lane
+        # We check the truncated sequences (effective length) used for sequencing.
+        
+        current_indexes = []
+        for r in bucket:
+            # r["i7"] is the original string, we need to truncate it
+            s7 = r["i7"][:L7]
+            # i5 might be reverse-complemented; match the optimization logic
+            s5_raw = r["i5"]
+            if args.rc_i5:
+                s5 = revcomp(s5_raw)[:L5]
+            else:
+                s5 = s5_raw[:L5]
+            current_indexes.append(f"{s7}+{s5}")
+        
+        # Use Counter to find duplicates
+        counts = Counter(current_indexes)
+        dups = [idx for idx, cnt in counts.items() if cnt > 1]
+        
+        if dups:
+            conflict_found = True
+            print(f"❌ [CRITICAL FAIL] Lane {lane_num} contains DUPLICATE indexes: {dups}")
+        else:
+            print(f"✅ Lane {lane_num} unique check passed.")
+
+    if conflict_found:
+        print("\n!!!!!!!!!! WARNING !!!!!!!!!!")
+        print("Index conflict detected! DO NOT proceed with sequencing using this assignment!")
+        print("Suggestions:")
+        print("1. Check input file for identical samples.")
+        print("2. Increase --lanes.")
+        print("3. Check if --iters is too low.")
+        print("!!!!!!!!!!!!!!!!!!!!!!!!!!!!!\n")
+        # If you want the script to abort without saving, uncomment the line below:
+        # raise RuntimeError("Duplicate indexes detected in optimized assignment.")
+    else:
+        print("✨ All lanes are free of index conflicts.\n")
+    # ==================== [New] Final Index Conflict Check End ====================
+
 
     print_group_human(report, out_path=args.out)
 
