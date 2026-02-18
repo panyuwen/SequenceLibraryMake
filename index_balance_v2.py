@@ -647,10 +647,47 @@ def fmt_bool(b: bool) -> str:
 def fmt_color_triplet(d: Dict[str, float]) -> str:
     return f"green={d['green']:.2f}  blue={d['blue']:.2f}  dark={d['dark']:.2f}"
 
-def print_per_cycle_list(per_cycle: List[Dict[str, Any]], indent: str = "  ") -> None:
+
+def suggest_base_adjustment(color: Dict[str, float], min_green: float, min_blue: float, max_dark: float) -> str:
+    """Suggest which bases to increase/decrease to make a FAIL cycle pass.
+
+    2-color mapping used here:
+      T: green only
+      C: green + blue
+      A: blue only
+      G: dark
+    """
+    sug: list[str] = []
+    if color.get("green", 0.0) < min_green:
+        sug.append("↑(T/C) to raise green")
+    # pass condition is blue > min_blue (strict), so fail includes ==.
+    if color.get("blue", 0.0) <= min_blue:
+        sug.append("↑(A/C) to raise blue")
+    if color.get("dark", 0.0) > max_dark:
+        sug.append("↓G to reduce dark")
+    return "" if not sug else " -> To PASS: " + "; ".join(sug)
+
+
+# def print_per_cycle_list(per_cycle: List[Dict[str, Any]], indent: str = "  ") -> None:
+#     print(f"{indent}Per-cycle results:")
+#     for pc in per_cycle:
+#         print(f"{indent}  #{pc['cycle']:>2}  {fmt_color_triplet(pc['color'])}  [{'PASS' if pc['ok'] else 'FAIL'}]")
+
+def print_per_cycle_list(
+    per_cycle: List[Dict[str, Any]],
+    indent: str = "  ",
+    min_green: float | None = None,
+    min_blue: float | None = None,
+    max_dark: float | None = None,
+) -> None:
     print(f"{indent}Per-cycle results:")
     for pc in per_cycle:
-        print(f"{indent}  #{pc['cycle']:>2}  {fmt_color_triplet(pc['color'])}  [{'PASS' if pc['ok'] else 'FAIL'}]")
+        status = "PASS" if pc["ok"] else "FAIL"
+        extra = ""
+        if (not pc["ok"]) and (min_green is not None) and (min_blue is not None) and (max_dark is not None):
+            extra = suggest_base_adjustment(pc["color"], min_green, min_blue, max_dark)
+        print(f"{indent}  #{pc['cycle']:>2}  {fmt_color_triplet(pc['color'])}  [{status}]{extra}")
+
 
 def print_check_human(tag: str, rep: Dict[str, Any], min_green: float, min_blue: float, max_dark: float) -> None:
     print(f"{tag}: {fmt_bool(rep['hard_ok'])}  (HARD report: cycles 1-2 must pass)")
@@ -677,10 +714,29 @@ def print_check_human(tag: str, rep: Dict[str, Any], min_green: float, min_blue:
         print(f"  Weighted penalty (cycles ≥3): {rep['weighted_penalty']:.4f}  "
               f"(w34={sum(weights_info[2:4]):.2f} over C3-4)")
     # per-cycle dump
-    print_per_cycle_list(rep["per_cycle"], indent="  ")
+    # print_per_cycle_list(rep["per_cycle"], indent="  ")
+    print_per_cycle_list(rep["per_cycle"], indent="  ", min_green=min_green, min_blue=min_blue, max_dark=max_dark)
     print()
 
-def print_group_human(report: Dict[str, Any], out_path: str = "") -> None:
+
+# ANSI color helper
+def color_text(text: str, color: str = "yellow", bold: bool = False) -> str:
+    colors = {
+        "red": "31",
+        "green": "32",
+        "yellow": "33",
+        "blue": "34",
+        "magenta": "35",
+        "cyan": "36",
+    }
+    code = colors.get(color, "0")
+    prefix = f"\033[{1 if bold else 0};{code}m"
+    suffix = "\033[0m"
+    return f"{prefix}{text}{suffix}"
+
+
+# def print_group_human(report: Dict[str, Any], out_path: str = "") -> None:
+def print_group_human(report: Dict[str, Any], min_green: float, min_blue: float, max_dark: float, rc_i5: bool, out_path: str = "") -> None:
     print("=== Lane Assignment (Color Balance) ===")
     total_libs = sum(l['n_libraries'] for l in report['lane_reports'])
     print(f"Total libraries: {total_libs}")
@@ -696,12 +752,17 @@ def print_group_human(report: Dict[str, Any], out_path: str = "") -> None:
         print(f"  i5 weighted penalty (≥3): {lane['i5']['weighted_penalty']:.4f}")
         # Per-cycle details for i7 and i5
         print("  i7:")
-        print_per_cycle_list(lane["i7"]["per_cycle"], indent="    ")
+        print_per_cycle_list(lane["i7"]["per_cycle"], indent="    ", min_green=min_green, min_blue=min_blue, max_dark=max_dark)
         print("  i5:")
-        print_per_cycle_list(lane["i5"]["per_cycle"], indent="    ")
+        print_per_cycle_list(lane["i5"]["per_cycle"], indent="    ", min_green=min_green, min_blue=min_blue, max_dark=max_dark)
         print()
 
-    print(f"All lanes pass (hard C1-2): {'YES' if report['all_lanes_hard_pass'] else 'NO'}")
+        if rc_i5:
+            print(color_text("      Note: i5 was evaluated as reverse-complement (--rc-i5).", color="cyan", bold=True))
+            print()
+
+    print(color_text(f"All lanes pass (hard C1-2): {'YES' if report['all_lanes_hard_pass'] else 'NO'}", color="magenta", bold=True))
+    
     if out_path:
         print(f"Assignment saved to: {out_path}")
 
@@ -744,7 +805,7 @@ def cmd_check(args):
             }],
             "all_lanes_hard_pass": (rep7["hard_ok"] and rep5["hard_ok"])
         }
-        print_group_human(report, out_path="")
+        print_group_human(report, min_green=args.min_green, min_blue=args.min_blue, max_dark=args.max_dark, rc_i5=args.rc_i5, out_path="")
 
     if has_lane:
         labels = sorted({str(r.get("lane","")).strip() for r in items if str(r.get("lane","")).strip() != ""})
@@ -894,7 +955,7 @@ def cmd_group(args):
     # ==================== [New] Final Index Conflict Check End ====================
 
 
-    print_group_human(report, out_path=args.out)
+    print_group_human(report, min_green=args.min_green, min_blue=args.min_blue, max_dark=args.max_dark, rc_i5=args.rc_i5, out_path=args.out)
 
     # write assignment
     if args.out:
