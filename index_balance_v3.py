@@ -64,16 +64,17 @@ Manual constraints (optional, highest priority): --constraints <json|yaml>
     quota-preserving swaps and never moves must_include units). If the quotas force a
     barcode collision that no swap can resolve, it is reported and the file is not written.
 
-Objective priority (high -> low):
-  0. User --constraints (quotas + must_include)         (hard, if provided)
-  1. No barcode conflicts within a lane                 (hard)
-  2. Cycle 1/2 color feasibility (i7 & i5)              (--c12-weight, default 1e6)
-  3. Balanced per-lane ratio sums (loading)            (--balance-weight, default 10)
-  4. Cycle >=3 color balance                           (--w34 weighting)
-  With realistic (color-balanced) index kits, step 2 is satisfied in any layout, so
-  lanes come out ratio-balanced; with pathological indexes, color feasibility wins
-  over balance. Set --balance-weight 0 for v2-style behavior (fixed round-robin lane
-  sizes, color-only optimization).
+Objective priority (high -> low), consistent across all assignment modes:
+  0. User --constraints quotas / must_include            (hard, if provided)
+  1. No barcode conflicts within a lane                  (hard)
+  2. Balanced per-lane read (ratio) totals               (ENSURED)
+  3. Cycle 1/2 color feasibility (i7 & i5)               (best-effort, within balanced)
+  4. Cycle >=3 color balance                             (--w34 weighting)
+  Read balance is ensured first; color is then optimized WITHIN the balanced layouts
+  (e.g. by swapping equal-ratio samples). The optimizer never sacrifices read balance to
+  chase color. NOTE: color feasibility is bounded by the index design — if the index pool
+  is color-deficient at some cycle (e.g. few T/C at one position), no lane split can fix
+  it; the report flags such cycles.
 
 Hard constraint definition (NEW emphasis):
   - Barcode uniqueness uses the FULL index strings (after optional --rc-i5), which is
@@ -117,6 +118,14 @@ except Exception:
     openpyxl = None
 
 BASES = ("A", "C", "G", "T")
+
+# Assignment objective priority (high -> low), used by ALL assignment modes:
+#   no barcode conflict (1e12, hard) >> balanced per-lane read totals (ENSURE)
+#   >> cycle 1/2 color feasibility >> cycle >=3 color.
+# Balance dominates color so the optimizer never sacrifices read balance to chase color;
+# color is optimized within the balanced layouts (e.g. by swapping equal-ratio samples).
+BALANCE_WEIGHT = 1e7
+C12_WEIGHT = 1e3
 
 # ============================================================================
 # IO & utils
@@ -1454,7 +1463,7 @@ def _group_freeze(args, items):
     # optimizer would "hide" hard-to-color samples in pool-covered lanes (which carry no color
     # cost) at the expense of read balance. (Differs from default group mode, where color leads.)
     buckets = optimize_units(buckets, L7, L5, args.rc_i5, args.iters, args.seed, mg, mb, md, w7, w5,
-                             c12_weight=1e3, balance_weight=1e7,
+                             c12_weight=C12_WEIGHT, balance_weight=BALANCE_WEIGHT,
                              allow_moves=True, locked_uids=locked)
 
     _report_freeze(args, items, into, buckets, dropped, L7, L5, w7, w5)
@@ -1637,7 +1646,7 @@ def cmd_group(args):
             print(color_text(f"\n--auto-expand set: solving at {min_lanes} lanes.\n", "green", True))
             buckets = assign_and_optimize(units, min_lanes, L7, L5, args.rc_i5,
                                           args.iters, args.seed, mg, mb, md, w7, w5,
-                                          args.c12_weight, args.balance_weight)
+                                          C12_WEIGHT, BALANCE_WEIGHT)
             _finish_feasible(args, buckets, min_lanes, L7, L5, w7, w5, dup_groups, expanded_from=lanes)
             return
 
@@ -1652,7 +1661,7 @@ def cmd_group(args):
             kept = [units[i] for i in range(n_units) if i not in removed_set]
             buckets = assign_and_optimize(kept, lanes, L7, L5, args.rc_i5,
                                           min(args.iters, 8000), args.seed,
-                                          mg, mb, md, w7, w5, args.c12_weight, args.balance_weight)
+                                          mg, mb, md, w7, w5, C12_WEIGHT, BALANCE_WEIGHT)
             if buckets is None:
                 print(f"--- Removal Plan {k}: (failed to lay out remaining samples) ---")
                 continue
@@ -1671,7 +1680,7 @@ def cmd_group(args):
     print()
     buckets = assign_and_optimize(units, lanes, L7, L5, args.rc_i5,
                                   args.iters, args.seed, mg, mb, md, w7, w5,
-                                  args.c12_weight, args.balance_weight)
+                                  C12_WEIGHT, BALANCE_WEIGHT)
     _finish_feasible(args, buckets, lanes, L7, L5, w7, w5, dup_groups)
 
 
@@ -1700,7 +1709,7 @@ def _group_with_constraints(args, items, units, lanes, constraints, L7, L5, w7, 
 
     buckets = optimize_units(buckets, L7, L5, args.rc_i5, args.iters, args.seed,
                              mg, mb, md, w7, w5,
-                             c12_weight=args.c12_weight, balance_weight=args.balance_weight,
+                             c12_weight=C12_WEIGHT, balance_weight=BALANCE_WEIGHT,
                              locked_uids=locked, quota_lock=True)
 
     print(color_text("Quotas / must_include satisfied — now checking barcode conflicts...", "cyan"))
@@ -1819,12 +1828,6 @@ def build_parser():
                          "only for lanes whose samples are all fully indexed.")
     pg.add_argument("--iters", type=int, default=20000, help="Swap/move iterations (default 20000)")
     pg.add_argument("--seed", type=int, default=42, help="Random seed (default 42)")
-    pg.add_argument("--c12-weight", type=float, default=1e6, help="Priority weight for cycle 1/2 (default 1e6)")
-    pg.add_argument("--balance-weight", type=float, default=10.0,
-                    help="Weight for balancing per-lane ratio sums. Priority is "
-                         "conflict >> cycle1/2 color >> ratio balance >> cycle>=3 color. "
-                         "Set 0 for v2-style behavior (fixed round-robin lane sizes, color only). "
-                         "(default 10.0)")
     pg.add_argument("--max-plans", type=int, default=3, help="Max removal plans to show when infeasible (default 3)")
     pg.add_argument("--auto-expand", action="store_true",
                     help="If requested lanes are infeasible, automatically solve at the minimum feasible lanes")

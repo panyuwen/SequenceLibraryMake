@@ -185,7 +185,7 @@ Additional remarks:
 | Duplicate `i7+i5` in one lane | penalized, may persist | detected up front, **separated by construction** |
 | Pre‑pooled libraries | not modeled | **`bundle` column** keeps them together (atomic) |
 | Too many samples for N lanes | not reported | **min lanes needed + removal plans** |
-| Lane loading balance | fixed by round‑robin | **ratio‑sum balancing** (`--balance-weight`) |
+| Lane loading balance | fixed by round‑robin | **ratio‑sum balancing, ensured above color** |
 | Conflict definition | truncated window | **full barcode** (demux‑correct) |
 | `--constraints` (quotas/must‑include) | supported | **supported, with top priority** — honored first, then auto‑optimized within |
 | Partial assignment (some lanes pre‑fixed) | not supported | **`--into` freeze mode** — honor existing lanes, fill only the blanks |
@@ -198,7 +198,7 @@ python index_balance_v3.py group \
   library.csv \
   --lanes 3 \
   --out lanes_assign.csv \
-  [--rc-i5 --balance-weight 10 --max-plans 3 --auto-expand]
+  [--rc-i5 --max-plans 3 --auto-expand]
 ```
 
 ### Check — evaluate an existing layout
@@ -304,7 +304,7 @@ Plus two behaviors that make a mixed real sheet "just work":
 
 > `--into` and `--constraints` are different assignment mechanisms and **cannot be combined** (the tool errors if both are given).
 
-**Priority in freeze mode** (differs from default group mode — matches pooling intent):
+**Priority in freeze mode** (the same read-balance-first order used by all modes):
 
 | Priority | Objective |
 |---|---|
@@ -315,31 +315,31 @@ Plus two behaviors that make a mixed real sheet "just work":
 i.e. read-count balance is **ensured first**; color is optimized within balanced layouts (so the optimizer won't sacrifice balance to "hide" awkward samples in pool-covered lanes). Conflicts are resolved automatically (duplicates separated across the `--into` lanes); if a barcode is over-subscribed for the number of `--into` lanes, it reports the offending sample. The `--out` CSV is the **whole table** with the `lane` column filled (frozen + newly assigned + ignored rows all preserved).
 
 ## Objective Priority
-The optimizer minimizes a layered objective (high → low):
+All assignment modes (`group`, `--constraints`, `--into`) minimize the **same layered objective** (high → low):
 
 | Priority | Objective | Knob |
 |---|---|---|
 | 0 (hard, optional) | User constraints: quotas + must_include | `--constraints` |
 | 1 (hard) | No barcode conflict within a lane | — |
-| 2 | Cycle 1/2 color feasibility (i7 & i5) | `--c12-weight` (default 1e6) |
-| 3 | Balanced per‑lane ratio sums (loading) | `--balance-weight` (default 10) |
+| 2 | **Balanced per‑lane read (ratio) totals** — *ensured* | — |
+| 3 | Cycle 1/2 color feasibility (i7 & i5) — *best‑effort* | — |
 | 4 | Cycle ≥3 color balance | `--w34` |
 
-With realistic (color‑balanced) index kits, priority 2 is met in any layout, so lanes come out **ratio‑balanced**; with pathological indexes, color feasibility correctly wins over balance. Set `--balance-weight 0` for v2‑style behavior (fixed round‑robin lane sizes, color‑only optimization).
+**Read balance is ensured first**; color is then optimized *within* the balanced layouts (e.g. by swapping equal‑ratio samples). The optimizer never sacrifices read balance to chase color. ⚠️ Color feasibility is bounded by the **index design**: if the index pool is color‑deficient at some cycle (e.g. very few `T`/`C` at one position → low green), no lane split can fix it — the per‑cycle report flags such cycles, and the remedy is to re‑pick/add an index, not to re‑balance.
 
 ## New & Changed Options (v3)
 | Option | Description | Default |
 |---|---|---|
 | `--constraints` | JSON/YAML per‑lane quotas + must_include; **takes priority** and sets the lane count | none |
 | `--into` | Freeze mode: honor the existing `lane` column (fixed rows + no‑index ballast); distribute blank‑lane rows into these lanes, ignore rows pinned elsewhere | none |
-| `--balance-weight` | Weight for balancing per‑lane ratio sums (`0` = v2‑style, color‑only) | 10.0 |
 | `--max-plans` | Number of removal plans to show when infeasible | 3 |
 | `--auto-expand` | If infeasible, solve at the minimum feasible #lanes instead | off |
 | `bundle` (input column) | Atomic pooling unit; rows with the same `bundle` value stay in one lane | empty |
 
-`--lanes` is required **unless** `--constraints` or `--into` is given (each sets the lanes itself). All shared v2 options behave the same: `--cycles`, `--i7-cycles`, `--i5-cycles`, `--min-green`, `--min-blue`, `--max-dark`, `--w34`, `--rc-i5`, `--iters`, `--seed`, `--c12-weight`, `--out`. (In `--into` mode, balance is prioritized over color, so `--balance-weight`/`--c12-weight` are set internally.)
+`--lanes` is required **unless** `--constraints` or `--into` is given (each sets the lanes itself). Shared evaluation options behave as before: `--cycles`, `--i7-cycles`, `--i5-cycles`, `--min-green`, `--min-blue`, `--max-dark`, `--w34`, `--rc-i5`, `--iters`, `--seed`, `--out`. The read-balance ≫ color priority is fixed internally (no weight knobs) — see Objective Priority above.
 
 ## Notes (v3)
+- **Keep-balanced is the default (and only) strategy:** lanes are balanced by read (ratio) total first, then color-optimized *within* that balance — color never overrides balance, and there is no weight knob to change this. When the index pool is color-deficient at a cycle (⚠️ see Objective Priority), the report may show that cycle failing on a balanced layout; that is expected and is an index-design issue, not a balancing one.
 - **Unfixable bundles:** if a pre‑pooled bundle contains two members with the *same* barcode, no lane assignment can demultiplex it — v3 reports `UNFIXABLE`, names the colliding members, and stops (fix the pool, then re‑run).
 - **Undetermined verdict:** on very large or tangled bundle graphs the exact colorability search may exceed its step budget; v3 then prints `⚠️ UNDETERMINED` (may still be feasible) rather than a false `INFEASIBLE`.
 - **Write safety:** v3 runs a final conflict check and **refuses to write** `--out` if any collision remains.
